@@ -1,33 +1,31 @@
 Demo Mongo Sharded Cluster with Docker Compose
 =========================================
 
-### PSS Style (Primary -Secondary - Secondary)
+## PSA Style (Primary - Secondary - Arbiter)
 
-Need PSA? Check [here](https://github.com/minhhungit/mongodb-cluster-docker-compose/tree/master/PSA)
+Need PSS? Check [here](https://github.com/minhhungit/mongodb-cluster-docker-compose)
 
 ---
 
-### WARNING (Windows & OS X) 
+### WARNING (Windows & OS X)
 
->The default Docker setup on Windows and OS X uses a VirtualBox VM to host the Docker daemon. 
->Unfortunately, the mechanism VirtualBox uses to share folders between the host system and 
->the Docker container is not compatible with the memory mapped files used by MongoDB 
->(see [vbox bug](https://www.virtualbox.org/ticket/819), [docs.mongodb.org](https://docs.mongodb.com/manual/administration/production->notes/#fsync-on-directories) 
->and related [jira.mongodb.org bug](https://jira.mongodb.org/browse/SERVER-8600)). 
+>The default Docker setup on Windows and OS X uses a VirtualBox VM to host the Docker daemon.
+>Unfortunately, the mechanism VirtualBox uses to share folders between the host system and
+>the Docker container is not compatible with the memory mapped files used by MongoDB
+>(see [vbox bug](https://www.virtualbox.org/ticket/819), [docs.mongodb.org](https://docs.mongodb.com/manual/administration/production->notes/#fsync-on-directories)
+>and related [jira.mongodb.org bug](https://jira.mongodb.org/browse/SERVER-8600)).
 >This means that it is not possible to run a MongoDB container with the data directory mapped to the host.
 >
->&#8211; Docker Hub ([source here](https://github.com/docker-library/docs/blob/b78d49c9dffe5dd8b3ffd1db338c62b9e1fc3db8/mongo/content.md#where-to-store-data) 
+>&#8211; Docker Hub ([source here](https://github.com/docker-library/docs/blob/b78d49c9dffe5dd8b3ffd1db338c62b9e1fc3db8/mongo/content.md#where-to-store-data)
 >or [here](https://github.com/docker-library/mongo/issues/232#issuecomment-355423692))
 ---
 
 ### Mongo Components
 
-* Config Server (3 member replica set): `configsvr01`,`configsvr02`,`configsvr03`
-* 3 Shards (each a 3 member `PSS` replica set):
-	* `shard01-a`,`shard01-b`, `shard01-c`
-	* `shard02-a`,`shard02-b`, `shard02-c`
-	* `shard03-a`,`shard03-b`, `shard03-c`
-* 2 Routers (mongos): `router01`, `router02`
+* Config Server: `config-server`
+* 1 Shard (3 member `PSA` replica set):
+	* `shard-a`,`shard-b` and 1 arbiter `shard-x`
+* 1 Router (mongos): `router`
 
 <img src="https://raw.githubusercontent.com/minhhungit/mongodb-cluster-docker-compose/master/images/sharding-and-replica-sets.png" style="width: 100%;" />
 
@@ -38,49 +36,24 @@ Need PSA? Check [here](https://github.com/minhhungit/mongodb-cluster-docker-comp
 docker-compose up -d
 ```
 
-If you get error "docker.errors.DockerException: Error while fetching server API version" and 
-used WSL (Windows Subsystem for Linux) need to enable 'WSL Integration' for required distro 
-in Windows Docker Desktop (Settings -> Resources-> WSL Integration -> Enable integration with required distros).
-
-<img src="https://raw.githubusercontent.com/minhhungit/mongodb-cluster-docker-compose/master/images/wsl2.png" style="width: 100%;" />
-
-Link: https://stackoverflow.com/a/65347214/3007147
-
-- **Step 2: Initialize the replica sets (config servers and shards) and routers**
+- **Step 2: Initialize the replica set (config server and shard) and router**
 
 ```bash
-docker-compose exec configsvr01 sh -c "mongo < /scripts/init-configserver.js"
+docker-compose exec config-server sh -c "mongo < /scripts/init-configserver.js"
 
-docker-compose exec shard01-a sh -c "mongo < /scripts/init-shard01.js"
-docker-compose exec shard02-a sh -c "mongo < /scripts/init-shard02.js"
-docker-compose exec shard03-a sh -c "mongo < /scripts/init-shard03.js"
+docker-compose exec shard-a sh -c "mongo < /scripts/init-shard01.js"
 ```
 
-If you get error like "E QUERY    [thread1] SyntaxError: unterminated string literal @(shellhelp2)", problem maybe due to:
+- **Step 3: Connect to the primary and add arbiters**
+```bash
+docker exec -it shard-a bash -c "echo 'rs.addArb(\""shard-x:27017\"")' | mongo --port 27017"
+```
 
->On Unix, you will get this error if your script has Dos/Windows end of lines (CRLF) instead of Unix end of lines (LF).
-
-To fix it, modify script files in `scripts` folder, remove newline, change multi line to one line
-
-Link: https://stackoverflow.com/a/51728442/3007147
-
-- **Step 3: Initializing the router**
+- **Step 4: Initializing the router**
 >Note: Wait a bit for the config server and shards to elect their primaries before initializing the router
 
 ```bash
-docker-compose exec router01 sh -c "mongo < /scripts/init-router.js"
-```
-
-- **Step 4: Enable sharding and setup sharding-key**
-```bash
-docker-compose exec router01 mongo --port 27017
-
-// Enable sharding for database `MyDatabase`
-sh.enableSharding("MyDatabase")
-
-// Setup shardingKey for collection `MyCollection`**
-db.adminCommand( { shardCollection: "MyDatabase.MyCollection", key: { supplierId: "hashed" } } )
-
+docker-compose exec router sh -c "mongo < /scripts/init-router.js"
 ```
 
 >Done! but before you start inserting data you should verify them first
@@ -90,7 +63,7 @@ db.adminCommand( { shardCollection: "MyDatabase.MyCollection", key: { supplierId
 - **Verify the status of the sharded cluster**
 
 ```bash
-docker-compose exec router01 mongo --port 27017
+docker-compose exec router mongo --port 27017
 sh.status()
 ```
 *Sample Result:*
@@ -102,9 +75,9 @@ sh.status()
         "clusterId" : ObjectId("5d38fb010eac1e03397c355a")
   }
   shards:
-        {  "_id" : "rs-shard-01",  "host" : "rs-shard-01/shard01-a:27017,shard01-b:27017,shard01-c:27017",  "state" : 1 }
-        {  "_id" : "rs-shard-02",  "host" : "rs-shard-02/shard02-a:27017,shard02-b:27017,shard02-c:27017",  "state" : 1 }
-        {  "_id" : "rs-shard-03",  "host" : "rs-shard-03/shard03-a:27017,shard03-b:27017,shard03-c:27017",  "state" : 1 }
+        {  "_id" : "rs-shard-01",  "host" : "rs-shard-01/shard01-a:27017,shard01-b:27017",  "state" : 1 }
+        {  "_id" : "rs-shard-02",  "host" : "rs-shard-02/shard02-a:27017,shard02-b:27017",  "state" : 1 }
+        {  "_id" : "rs-shard-03",  "host" : "rs-shard-03/shard03-a:27017,shard03-b:27017",  "state" : 1 }
   active mongoses:
         "4.0.10" : 2
   autosplit:
@@ -119,13 +92,11 @@ sh.status()
         {  "_id" : "config",  "primary" : "config",  "partitioned" : true }
 ```
 
-- **Verify status of replica set for each shard**
-> You should see 1 PRIMARY, 2 SECONDARY
+- **Verify status of replica set**
+> You should see 1 PRIMARY, 1 SECONDARY and 1 ARBITER
 
 ```bash
-docker exec -it rydell-shard-01-node-a bash -c "echo 'rs.status()' | mongo --port 27017" 
-docker exec -it rydell-shard-02-node-a bash -c "echo 'rs.status()' | mongo --port 27017" 
-docker exec -it rydell-shard-03-node-a bash -c "echo 'rs.status()' | mongo --port 27017" 
+docker exec -it shard-a bash -c "echo 'rs.status()' | mongo --port 27017" 
 ```
 *Sample Result:*
 ```
@@ -212,29 +183,19 @@ MongoDB server version: 4.0.11
                         "configVersion" : 2
                 },
                 {
-                        "_id" : 2,
-                        "name" : "shard01-c:27017",
+                        "_id" : 3,
+                        "name" : "shard01-x:27017",
                         "health" : 1,
-                        "state" : 2,
-                        "stateStr" : "SECONDARY",
-                        "uptime" : 142,
-                        "optime" : {
-                                "ts" : Timestamp(1564642428, 1),
-                                "t" : NumberLong(1)
-                        },
-                        "optimeDurable" : {
-                                "ts" : Timestamp(1564642428, 1),
-                                "t" : NumberLong(1)
-                        },
-                        "optimeDate" : ISODate("2019-08-01T06:53:48Z"),
-                        "optimeDurableDate" : ISODate("2019-08-01T06:53:48Z"),
-                        "lastHeartbeat" : ISODate("2019-08-01T06:53:57.952Z"),
-                        "lastHeartbeatRecv" : ISODate("2019-08-01T06:53:57.968Z"),
+                        "state" : 7,
+                        "stateStr" : "ARBITER",
+                        "uptime" : 99,
+                        "lastHeartbeat" : ISODate("2019-08-01T06:53:57.957Z"),
+                        "lastHeartbeatRecv" : ISODate("2019-08-01T06:53:58.017Z"),
                         "pingMs" : NumberLong(0),
                         "lastHeartbeatMessage" : "",
-                        "syncingTo" : "shard01-a:27017",
-                        "syncSourceHost" : "shard01-a:27017",
-                        "syncSourceId" : 0,
+                        "syncingTo" : "",
+                        "syncSourceHost" : "",
+                        "syncSourceId" : -1,
                         "infoMessage" : "",
                         "configVersion" : 2
                 }
@@ -265,7 +226,7 @@ bye
 
 - **Check database status**
 ```bash
-docker-compose exec router01 mongo --port 27017
+docker-compose exec router mongo --port 27017
 use MyDatabase
 db.stats()
 db.MyCollection.getShardDistribution()
@@ -275,7 +236,7 @@ db.MyCollection.getShardDistribution()
 ```
 {
         "raw" : {
-                "rs-shard-01/shard01-a:27017,shard01-b:27017,shard01-c:27017" : {
+                "rs-shard-01/shard01-a:27017,shard01-b:27017" : {
                         "db" : "MyDatabase",
                         "collections" : 1,
                         "views" : 0,
@@ -290,7 +251,7 @@ db.MyCollection.getShardDistribution()
                         "fsTotalSize" : 62725787648,
                         "ok" : 1
                 },
-                "rs-shard-03/shard03-a:27017,shard03-b:27017,shard03-c:27017" : {
+                "rs-shard-03/shard03-a:27017,shard03-b:27017" : {
                         "db" : "MyDatabase",
                         "collections" : 1,
                         "views" : 0,
@@ -305,7 +266,7 @@ db.MyCollection.getShardDistribution()
                         "fsTotalSize" : 62725787648,
                         "ok" : 1
                 },
-                "rs-shard-02/shard02-a:27017,shard02-b:27017,shard02-c:27017" : {
+                "rs-shard-02/shard02-a:27017,shard02-b:27017" : {
                         "db" : "MyDatabase",
                         "collections" : 1,
                         "views" : 0,
@@ -348,16 +309,22 @@ db.MyCollection.getShardDistribution()
 ### More commands
 
 ```bash
-docker exec -it rydell-mongo-config-01 bash -c "echo 'rs.status()' | mongo --port 27017"
+docker exec -it config-server bash -c "echo 'rs.status()' | mongo --port 27017"
 
 
-docker exec -it rydell-shard-01-node-a bash -c "echo 'rs.help()' | mongo --port 27017"
-docker exec -it rydell-shard-01-node-a bash -c "echo 'rs.status()' | mongo --port 27017" 
-docker exec -it rydell-shard-01-node-a bash -c "echo 'rs.printReplicationInfo()' | mongo --port 27017" 
-docker exec -it rydell-shard-01-node-a bash -c "echo 'rs.printSlaveReplicationInfo()' | mongo --port 27017"
+docker exec -it shard-a bash -c "echo 'rs.help()' | mongo --port 27017"
+docker exec -it shard-a bash -c "echo 'rs.status()' | mongo --port 27017" 
+docker exec -it shard-a bash -c "echo 'rs.printReplicationInfo()' | mongo --port 27017" 
+docker exec -it shard-a bash -c "echo 'rs.printSlaveReplicationInfo()' | mongo --port 27017"
 ```
 
 ---
+
+### Connection to cluster
+Connection string is 
+```
+mongodb://localhost:27117
+```
 
 ### Normal Startup
 The cluster only has to be initialized on the first run. Subsequent startup can be achieved simply with `docker-compose up` or `docker-compose up -d`
@@ -375,20 +342,6 @@ docker-compose down -v --rmi all --remove-orphans
 ```
 
 Execute the **First Run** instructions again.
-
-### Screenshot
-
-<img src="https://raw.githubusercontent.com/minhhungit/mongodb-cluster-docker-compose/master/images/demo.png" style="width: 100%;" />
-<img src="https://raw.githubusercontent.com/minhhungit/mongodb-cluster-docker-compose/master/images/demo-03.png" style="width: 100%;" />
-<img src="https://raw.githubusercontent.com/minhhungit/mongodb-cluster-docker-compose/master/images/demo-02.png" style="width: 100%;" />
-<img src="https://raw.githubusercontent.com/minhhungit/mongodb-cluster-docker-compose/master/images/replicaset-shard-01.png" style="width: 100%;" />
-
-### Donate ^^
-**If you like my works and would like to support then you can buy me a coffee ☕️ anytime**
-
-<a href='https://ko-fi.com/I2I13GAGL' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://cdn.ko-fi.com/cdn/kofi4.png?v=2' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a> 
-
-**I would appreciate it!!!**
 
 ---
 #### Inspired by:
